@@ -1,0 +1,85 @@
+import groovy.json.JsonSlurper
+
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '3.5.5'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.example'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(23)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+ext {
+	set('springAiVersion', "1.0.1")
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.retry:spring-retry'
+	implementation 'org.springframework.boot:spring-boot-starter-aop'
+	implementation 'org.springframework.ai:spring-ai-starter-model-openai'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.wiremock.integrations:wiremock-spring-boot:3.9.0'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+dependencyManagement {
+	imports {
+		mavenBom "org.springframework.ai:spring-ai-bom:${springAiVersion}"
+	}
+}
+
+// Muat key hanya saat task live dijalankan; jangan tulis key ke file proyek/log.
+def useNarayaKey = { taskProvider ->
+	taskProvider.configure {
+		doFirst {
+			def key = System.getenv('NARAYA_API_KEY')
+			if (!key) {
+				def modelsFile = new File(System.getProperty('user.home'), '.pi/agent/models.json')
+				if (!modelsFile.isFile()) {
+					throw new GradleException("Konfigurasi pi tidak ditemukan: ${modelsFile}. Set NARAYA_API_KEY sendiri.")
+				}
+				key = new JsonSlurper().parse(modelsFile).providers?.naraya?.apiKey
+				if (key?.startsWith('$') || key?.startsWith('!')) {
+					throw new GradleException('Key Naraya di models.json bukan literal; set NARAYA_API_KEY sendiri.')
+				}
+			}
+			if (!key?.trim()) {
+				throw new GradleException('API key Naraya tidak tersedia; set NARAYA_API_KEY atau isi provider naraya di models.json pi.')
+			}
+			environment 'NARAYA_API_KEY', key
+		}
+	}
+}
+
+useNarayaKey(tasks.named('bootRun'))
+
+tasks.named('test') {
+	useJUnitPlatform {
+		excludeTags 'live-ai'
+	}
+}
+
+// Chapter 2: tes ini memanggil provider AI sungguhan dan dapat dikenai biaya.
+tasks.register('liveAiTest', Test) {
+	description = 'Runs Chapter 2 evaluator tests against a real AI provider.'
+	group = 'verification'
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform {
+		includeTags 'live-ai'
+	}
+	outputs.upToDateWhen { false }
+}
+
+useNarayaKey(tasks.named('liveAiTest'))
